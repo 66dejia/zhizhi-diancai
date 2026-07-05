@@ -1,8 +1,7 @@
 /**
- * 点菜主页组件 - 实时同步版
- * 加减菜品后自动通过 WebSocket 发送给同房间用户
+ * 点菜主页组件
  */
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useApp } from "../store/AppContext";
 import CategoryNav from "../components/CategoryNav";
 import DishCard from "../components/DishCard";
@@ -13,8 +12,8 @@ import AddDishModal from "../components/AddDishModal";
 import EditDishModal from "../components/EditDishModal";
 import { DishCardSkeleton } from "../components/Skeleton";
 
-export default function MenuPage({ onCheckout, syncCart, syncOrder, syncClearCart }) {
-  const { dishes, cartItems } = useApp();
+export default function MenuPage({ onCheckout, syncOrder, syncClearCart }) {
+  const { dishes } = useApp();
   const [activeCategory, setActiveCategory] = useState("meat");
   const [keyword, setKeyword] = useState("");
   const [sortBy, setSortBy] = useState("default");
@@ -23,26 +22,19 @@ export default function MenuPage({ onCheckout, syncCart, syncOrder, syncClearCar
   const [editDish, setEditDish] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { const t = setTimeout(() => setLoading(false), 500); return () => clearTimeout(t); }, []);
-
-  // ★ 关键修复：每次本地购物车变化，立即同步到 WebSocket
   useEffect(() => {
-    if (syncCart && cartItems.length >= 0) {
-      syncCart(cartItems.map(item => ({
-        dish: item.dish,
-        quantity: item.quantity,
-        specs: item.specs || null
-      })));
-    }
-  }, [cartItems, syncCart]);
+    const timer = setTimeout(() => setLoading(false), 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   const filteredDishes = useMemo(() => {
     let result = dishes.filter((dish) => dish.category === activeCategory);
     if (keyword.trim()) {
       const kw = keyword.trim().toLowerCase();
       result = result.filter(
-        (dish) => dish.name.toLowerCase().includes(kw) ||
-        dish.tags.some((tag) => tag.toLowerCase().includes(kw))
+        (dish) =>
+          dish.name.toLowerCase().includes(kw) ||
+          dish.tags.some((tag) => tag.toLowerCase().includes(kw))
       );
     }
     switch (sortBy) {
@@ -76,7 +68,7 @@ export default function MenuPage({ onCheckout, syncCart, syncOrder, syncClearCar
           ) : filteredDishes.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
               <svg className="w-20 h-20 mb-4 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-              <p className="text-sm">没有找到相关菜品</p><p className="text-xs mt-1">试试其他关键词，或点击上方添加新菜品~</p>
+              <p className="text-sm">没有找到相关菜品</p><p className="text-xs mt-1">试试其他关键词或上方添加~</p>
             </div>
           ) : (
             <div className="flex flex-col gap-2 animate-fade-in">

@@ -1,179 +1,115 @@
 import React, {
-  createContext,
-  useContext,
-  useReducer,
-  useEffect,
-  useCallback,
+  createContext, useContext, useReducer, useEffect, useCallback, useRef,
 } from "react";
 import { useCartTotals, getCartItemUnitPrice } from "../hooks/useCartPrice";
 import { dishes as initialDishes, defaultCategories } from "../data/dishes";
 
-// ==================== 全局状态管理 + LocalStorage 持久化 ====================
-
 const AppContext = createContext(null);
 
-/* ---------- 工具函数 ---------- */
+/* ---------- helpers ---------- */
 export const makeCartKey = (dishId, specs) => {
-  const specStr = specs
-    ? Object.entries(specs)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([k, v]) => `${k}:${v}`)
-        .join("|")
+  const s = specs
+    ? Object.entries(specs).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k}:${v}`).join("|")
     : "";
-  return specStr ? `${dishId}__${specStr}` : `${dishId}__default`;
+  return s ? `${dishId}__${s}` : `${dishId}__default`;
 };
 
-const getNextId = (dishes) => Math.max(0, ...dishes.map((d) => d.id)) + 1;
+const nextId = (arr) => Math.max(0, ...arr.map(d => d.id)) + 1;
 
-/* ---------- 初始状态 ---------- */
-const initialState = {
+/* ---------- reducer ---------- */
+const init = {
   cart: {},
   historyOrders: [],
   dishes: initialDishes,
   categories: defaultCategories,
 };
 
-/* ---------- Reducer ---------- */
 function reducer(state, action) {
   switch (action.type) {
+    // ── local cart ──
     case "ADD_ITEM": {
       const { dish, specs } = action.payload;
-      const cartKey = makeCartKey(dish.id, specs);
-      const existing = state.cart[cartKey];
+      const key = makeCartKey(dish.id, specs);
+      const ex = state.cart[key];
       return {
         ...state,
         cart: {
           ...state.cart,
-          [cartKey]: existing
-            ? { ...existing, quantity: existing.quantity + 1 }
-            : { dish, quantity: 1, specs, cartKey },
+          [key]: ex
+            ? { ...ex, quantity: ex.quantity + 1 }
+            : { dish, quantity: 1, specs, cartKey: key },
         },
       };
     }
-
     case "REMOVE_ITEM": {
       const { cartKey } = action.payload;
-      const existing = state.cart[cartKey];
-      if (!existing) return state;
-      const newQuantity = existing.quantity - 1;
-      if (newQuantity <= 0) {
-        const newCart = { ...state.cart };
-        delete newCart[cartKey];
-        return { ...state, cart: newCart };
+      const ex = state.cart[cartKey];
+      if (!ex) return state;
+      const q = ex.quantity - 1;
+      if (q <= 0) {
+        const c = { ...state.cart };
+        delete c[cartKey];
+        return { ...state, cart: c };
       }
-      return {
-        ...state,
-        cart: {
-          ...state.cart,
-          [cartKey]: { ...existing, quantity: newQuantity },
-        },
-      };
+      return { ...state, cart: { ...state.cart, [cartKey]: { ...ex, quantity: q } } };
     }
-
     case "CLEAR_CART":
       return { ...state, cart: {} };
 
-    /* 从 WebSocket 接收的 roomCart 同步到本地 cart */
+    // ── remote sync (replace local cart) ──
     case "SYNC_CART": {
-      const { roomCart: rcart, clientId: cid } = action.payload;
-      // 将所有客户端的所有 items 合并到本地 cart
-      const newCart = {};
-      Object.entries(rcart || {}).forEach(([id, data]) => {
-        (data.items || []).forEach((item) => {
-          const cartKey = makeCartKey(item.dish.id, item.specs || null);
-          if (newCart[cartKey]) {
-            newCart[cartKey].quantity += item.quantity;
-          } else {
-            newCart[cartKey] = {
-              dish: item.dish,
-              quantity: item.quantity,
-              specs: item.specs || null,
-              cartKey,
-            };
-          }
+      const { roomCart } = action.payload;
+      const nc = {};
+      Object.entries(roomCart || {}).forEach(([, data]) => {
+        (data.items || []).forEach(item => {
+          const key = makeCartKey(item.dish.id, item.specs || null);
+          if (nc[key]) nc[key].quantity += item.quantity;
+          else nc[key] = { dish: item.dish, quantity: item.quantity, specs: item.specs || null, cartKey: key };
         });
       });
-      return { ...state, cart: newCart };
+      return { ...state, cart: nc };
     }
 
+    // ── orders / dishes / categories ──
     case "ADD_ORDER": {
       const { order } = action.payload;
+      return { ...state, historyOrders: [order, ...state.historyOrders] };
+    }
+    case "ADD_DISH": {
       return {
         ...state,
-        historyOrders: [order, ...state.historyOrders],
+        dishes: [...state.dishes, { ...action.payload.dish, id: nextId(state.dishes), monthlySales: 0 }],
       };
     }
-
-    /* ========== 菜品管理 ========== */
-    case "ADD_DISH": {
-      const newDish = {
-        ...action.payload.dish,
-        id: getNextId(state.dishes),
-        monthlySales: 0,
-      };
-      return { ...state, dishes: [...state.dishes, newDish] };
-    }
-
     case "UPDATE_DISH": {
       const { id, updates } = action.payload;
-      return {
-        ...state,
-        dishes: state.dishes.map((d) =>
-          d.id === id ? { ...d, ...updates } : d,
-        ),
-      };
+      return { ...state, dishes: state.dishes.map(d => d.id === id ? { ...d, ...updates } : d) };
     }
-
     case "DELETE_DISH": {
-      const { id } = action.payload;
-      return {
-        ...state,
-        dishes: state.dishes.filter((d) => d.id !== id),
-      };
+      return { ...state, dishes: state.dishes.filter(d => d.id !== action.payload.id) };
     }
-
     case "ADD_SALES_COUNT": {
-      const { salesMap } = action.payload;
-      return {
-        ...state,
-        dishes: state.dishes.map((d) => {
-          const add = salesMap[d.id] || 0;
-          return add > 0
-            ? { ...d, monthlySales: d.monthlySales + add }
-            : d;
-        }),
-      };
+      const sm = action.payload.salesMap;
+      return { ...state, dishes: state.dishes.map(d => ({ ...d, monthlySales: d.monthlySales + (sm[d.id] || 0) })) };
     }
-
-    /* ========== 分类管理 ========== */
     case "ADD_CATEGORY": {
-      const { category } = action.payload;
-      if (state.categories.find((c) => c.id === category.id)) return state;
-      return { ...state, categories: [...state.categories, category] };
+      const cat = action.payload.category;
+      if (state.categories.find(c => c.id === cat.id)) return state;
+      return { ...state, categories: [...state.categories, cat] };
     }
-
     case "DELETE_CATEGORY": {
-      const { id } = action.payload;
-      return {
-        ...state,
-        categories: state.categories.filter((c) => c.id !== id),
-      };
+      return { ...state, categories: state.categories.filter(c => c.id !== action.payload.id) };
     }
-
     case "LOAD_FROM_STORAGE": {
       const { cart, historyOrders, dishes, categories } = action.payload;
       return {
         ...state,
         cart: cart || {},
         historyOrders: historyOrders || [],
-        dishes: dishes && dishes.length > 0 ? dishes : state.dishes,
-        categories:
-          categories && categories.length > 0
-            ? categories
-            : state.categories,
+        dishes: dishes?.length > 0 ? dishes : state.dishes,
+        categories: categories?.length > 0 ? categories : state.categories,
       };
     }
-
     default:
       return state;
   }
@@ -181,114 +117,87 @@ function reducer(state, action) {
 
 /* ---------- Provider ---------- */
 export function AppProvider({ children }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const [state, dispatch] = useReducer(reducer, init);
+  const syncCbRef = useRef(null);       // WebSocket callback registered by App
+  const syncLockRef = useRef(false);    // prevent infinite loop
 
-  /* 加载持久化数据 */
+  /* Persistence */
   useEffect(() => {
     try {
-      const savedCart = localStorage.getItem("zzdc_cart");
-      const savedOrders = localStorage.getItem("zzdc_orders");
-      const savedDishes = localStorage.getItem("zzdc_dishes");
-      const savedCats = localStorage.getItem("zzdc_categories");
+      const ca = localStorage.getItem("zzdc_cart");
+      const ho = localStorage.getItem("zzdc_orders");
+      const di = localStorage.getItem("zzdc_dishes");
+      const ct = localStorage.getItem("zzdc_categories");
       dispatch({
         type: "LOAD_FROM_STORAGE",
         payload: {
-          cart: savedCart ? JSON.parse(savedCart) : {},
-          historyOrders: savedOrders ? JSON.parse(savedOrders) : [],
-          dishes: savedDishes ? JSON.parse(savedDishes) : null,
-          categories: savedCats ? JSON.parse(savedCats) : null,
+          cart: ca ? JSON.parse(ca) : {},
+          historyOrders: ho ? JSON.parse(ho) : [],
+          dishes: di ? JSON.parse(di) : null,
+          categories: ct ? JSON.parse(ct) : null,
         },
       });
-    } catch {
-      // 忽略损坏数据
-    }
+    } catch { /* ignore */ }
   }, []);
 
-  /* 持久化 */
-  useEffect(() => {
-    try { localStorage.setItem("zzdc_cart", JSON.stringify(state.cart)); } catch {}
-  }, [state.cart]);
-  useEffect(() => {
-    try { localStorage.setItem("zzdc_orders", JSON.stringify(state.historyOrders)); } catch {}
-  }, [state.historyOrders]);
-  useEffect(() => {
-    try { localStorage.setItem("zzdc_dishes", JSON.stringify(state.dishes)); } catch {}
-  }, [state.dishes]);
-  useEffect(() => {
-    try { localStorage.setItem("zzdc_categories", JSON.stringify(state.categories)); } catch {}
-  }, [state.categories]);
+  useEffect(() => { try { localStorage.setItem("zzdc_cart", JSON.stringify(state.cart)); } catch {} }, [state.cart]);
+  useEffect(() => { try { localStorage.setItem("zzdc_orders", JSON.stringify(state.historyOrders)); } catch {} }, [state.historyOrders]);
+  useEffect(() => { try { localStorage.setItem("zzdc_dishes", JSON.stringify(state.dishes)); } catch {} }, [state.dishes]);
+  useEffect(() => { try { localStorage.setItem("zzdc_categories", JSON.stringify(state.categories)); } catch {} }, [state.categories]);
 
-  /* ---------- 操作方法 ---------- */
-  const addItem = useCallback((dish, specs) => {
-    dispatch({ type: "ADD_ITEM", payload: { dish, specs } });
-  }, []);
-  const removeItem = useCallback((cartKey) => {
-    dispatch({ type: "REMOVE_ITEM", payload: { cartKey } });
-  }, []);
-  const clearCart = useCallback(() => {
-    dispatch({ type: "CLEAR_CART" });
-  }, []);
-  const addOrder = useCallback((order) => {
-    dispatch({ type: "ADD_ORDER", payload: { order } });
-    const salesMap = {};
-    order.items.forEach((item) => {
-      salesMap[item.dish.id] = (salesMap[item.dish.id] || 0) + item.quantity;
-    });
-    dispatch({ type: "ADD_SALES_COUNT", payload: { salesMap } });
-  }, []);
-  const addDish = useCallback((dish) => {
-    dispatch({ type: "ADD_DISH", payload: { dish } });
-  }, []);
-  const updateDish = useCallback((id, updates) => {
-    dispatch({ type: "UPDATE_DISH", payload: { id, updates } });
-  }, []);
-  const deleteDish = useCallback((id) => {
-    dispatch({ type: "DELETE_DISH", payload: { id } });
-  }, []);
-  const addCategory = useCallback((category) => {
-    dispatch({ type: "ADD_CATEGORY", payload: { category } });
-  }, []);
-  const deleteCategory = useCallback((id) => {
-    dispatch({ type: "DELETE_CATEGORY", payload: { id } });
-  }, []);
-  const syncCartFromRemote = useCallback((roomCart) => {
-    dispatch({ type: "SYNC_CART", payload: { roomCart } });
-  }, []);
-
-  /* 计算购物车汇总 */
+  /* Derive totals */
   const { totalPrice, totalCount, cartItems } = useCartTotals(state.cart);
 
+  /* ★ When cart changes (local or remote), fire the registered callback */
+  useEffect(() => {
+    if (!syncLockRef.current && syncCbRef.current) {
+      syncCbRef.current(cartItems);
+    }
+  }, [state.cart, cartItems]);
+
+  /* -- exposed API -- */
+  const setSyncCallback = useCallback(fn => { syncCbRef.current = fn; }, []);
+
+  const addItem   = useCallback((d, sp) => dispatch({ type: "ADD_ITEM",   payload: { dish: d, specs: sp } }), []);
+  const removeItem= useCallback(key   => dispatch({ type: "REMOVE_ITEM", payload: { cartKey: key } }), []);
+  const clearCart = useCallback(()     => dispatch({ type: "CLEAR_CART" }), []);
+
+  /* Remote sync – must not trigger the local callback again */
+  const syncCartFromRemote = useCallback(roomCart => {
+    syncLockRef.current = true;
+    dispatch({ type: "SYNC_CART", payload: { roomCart } });
+    setTimeout(() => { syncLockRef.current = false; }, 200);
+  }, []);
+
+  const addOrder     = useCallback(o => {
+    dispatch({ type: "ADD_ORDER", payload: { order: o } });
+    const sm = {}; o.items.forEach(i => { sm[i.dish.id] = (sm[i.dish.id] || 0) + i.quantity; });
+    dispatch({ type: "ADD_SALES_COUNT", payload: { salesMap: sm } });
+  }, []);
+  const addDish      = useCallback(d  => dispatch({ type: "ADD_DISH",       payload: { dish: d } }), []);
+  const updateDish   = useCallback((id, u) => dispatch({ type: "UPDATE_DISH", payload: { id, updates: u } }), []);
+  const deleteDish   = useCallback(id  => dispatch({ type: "DELETE_DISH",    payload: { id } }), []);
+  const addCategory  = useCallback(c   => dispatch({ type: "ADD_CATEGORY",   payload: { category: c } }), []);
+  const deleteCategory=useCallback(id  => dispatch({ type: "DELETE_CATEGORY",payload: { id } }), []);
+
   const value = {
-    cart: state.cart,
-    cartItems,
-    totalPrice,
-    totalCount,
-    dishes: state.dishes,
-    categories: state.categories,
+    cart: state.cart, cartItems, totalPrice, totalCount,
+    dishes: state.dishes, categories: state.categories,
     historyOrders: state.historyOrders,
-    addItem,
-    removeItem,
-    clearCart,
-    addOrder,
-    addDish,
-    updateDish,
-    deleteDish,
-    addCategory,
-    deleteCategory,
-    syncCartFromRemote,
+    addItem, removeItem, clearCart, addOrder,
+    addDish, updateDish, deleteDish,
+    addCategory, deleteCategory,
+    setSyncCallback, syncCartFromRemote,
     getItemUnitPrice: getCartItemUnitPrice,
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
-/* ---------- Hook ---------- */
 export function useApp() {
-  const context = useContext(AppContext);
-  if (!context) {
-    throw new Error("useApp 必须在 AppProvider 内部使用");
-  }
-  return context;
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error("useApp must be inside <AppProvider>");
+  return ctx;
 }
 
 export default AppContext;
