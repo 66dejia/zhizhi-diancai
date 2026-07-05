@@ -14,7 +14,7 @@ import AddDishModal from "../components/AddDishModal";
 import EditDishModal from "../components/EditDishModal";
 import { DishCardSkeleton } from "../components/Skeleton";
 
-export default function MenuPage({ onCheckout }) {
+export default function MenuPage({ onCheckout, syncCart, syncOrder, syncClearCart }) {
   const { dishes } = useApp(); // 使用 context 中的可编辑菜品列表
   const [activeCategory, setActiveCategory] = useState("meat");
   const [keyword, setKeyword] = useState("");

@@ -1,4 +1,4 @@
-/** 左侧分类导航 - 带 Emoji 图标 */
+/** 左侧分类导航 - 纯净文本版 */
 import { useState } from "react";
 import { useApp } from "../store/AppContext";
 
@@ -8,14 +8,13 @@ export default function CategoryNav({ activeCategory, onSelectCategory }) {
   const { categories, addCategory, deleteCategory } = useApp();
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newIcon, setNewIcon] = useState("🍽️");
 
   const handleAdd = () => {
     const name = newName.trim();
     if (!name) return;
     const id = "cat_" + Date.now().toString(36);
-    addCategory({ id, name, icon: newIcon });
-    setNewName(""); setNewIcon("🍽️"); setShowAdd(false);
+    addCategory({ id, name, icon: "" });
+    setNewName(""); setShowAdd(false);
   };
 
   return (
@@ -26,10 +25,9 @@ export default function CategoryNav({ activeCategory, onSelectCategory }) {
           return (
             <li key={cat.id} className="relative group">
               <button onClick={() => onSelectCategory(cat.id)}
-                className={`w-full py-3 px-1 flex flex-col items-center gap-1 transition-all duration-200 text-sm
-                  ${isActive ? "bg-primary-light text-primary font-semibold border-r-2 border-primary" : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"}`}>
-                <span className="text-xl">{cat.icon || "🍽️"}</span>
-                <span className="text-xs whitespace-nowrap">{cat.name}</span>
+                className={`w-full py-3 px-1 text-center transition-all duration-200 text-xs
+                  ${isActive ? "bg-primary-light text-primary font-semibold border-r-[3px] border-primary" : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"}`}>
+                {cat.name}
               </button>
               {!defaultIds.includes(cat.id) && (
                 <button onClick={(e)=>{e.stopPropagation();if(window.confirm(`删除分类「${cat.name}」？`)){deleteCategory(cat.id);if(activeCategory===cat.id)onSelectCategory("meat");}}}
@@ -45,9 +43,6 @@ export default function CategoryNav({ activeCategory, onSelectCategory }) {
             <input type="text" placeholder="分类名" value={newName} onChange={(e)=>setNewName(e.target.value)} onKeyDown={(e)=>{if(e.key==="Enter")handleAdd();}}
               className="w-full px-2 py-1 text-xs border border-gray-200 rounded focus:outline-none focus:border-primary" autoFocus />
             <div className="flex gap-1">
-              <select value={newIcon} onChange={(e)=>setNewIcon(e.target.value)} className="flex-1 text-xs border border-gray-200 rounded px-1 py-1">
-                {["🍽️","🍖","🥬","🥒","🍲","🍚","🥤","🥩","🐟","🥗","🍜","🍰","☕"].map(icon=><option key={icon} value={icon}>{icon}</option>)}
-              </select>
               <button onClick={handleAdd} className="flex-1 py-1 text-xs bg-primary text-white rounded">确定</button>
               <button onClick={()=>setShowAdd(false)} className="flex-1 py-1 text-xs bg-gray-100 rounded">取消</button>
             </div>
