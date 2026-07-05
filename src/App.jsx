@@ -1,16 +1,3 @@
-/**
- * App - 最终同步架构
- *
- * 数据流 (本地→远程):
- *   DishCard +/− → AppContext.addItem/removeItem
- *     → cart state 变更 → syncCallback(cartItems) 被触发
- *       → syncCart(items) → CART_UPDATE → Railway Broadcast → 其他客户端
- *
- * 数据流 (远程→本地):
- *   Railway → CART_SYNC → useWebSocket.roomCart 更新
- *     → App.jsx useEffect 检测到变更
- *       → AppContext.syncCartFromRemote(roomCart) → 本地购物车替换
- */
 import { useState, useEffect, useRef } from "react";
 import { AppProvider, useApp } from "./store/AppContext";
 import Header from "./components/Header";
@@ -23,22 +10,20 @@ import useWebSocket from "./hooks/useWebSocket";
 function AppInner() {
   const [view, setView] = useState("room");
   const [roomId, setRoomId] = useState(null);
-  const { cartItems, setSyncCallback, syncCartFromRemote } = useApp();
+  const { cartItems, registerWsSender, syncCartFromRemote } = useApp();
   const cartRef = useRef(cartItems);
 
   const ws = useWebSocket();
-  const {
-    connected, nickname, memberCount, notifications, roomCart,
-    joinRoom, leaveRoom, syncCart, syncOrder, syncClearCart,
-  } = ws;
+  const { connected, nickname, memberCount, notifications, roomCart,
+    joinRoom, leaveRoom, syncCart, syncOrder, syncClearCart } = ws;
 
-  /* 保持 cartRef 最新 */
+  /* keep cartRef in sync for the callback */
   useEffect(() => { cartRef.current = cartItems; }, [cartItems]);
 
-  /* ── 注册本地同步回调（只注册一次，通过 ref 保持最新状态）── */
+  /* ★ Bridge: register WebSocket sender into AppContext */
   useEffect(() => {
-    if (syncCart && setSyncCallback) {
-      setSyncCallback(() => {
+    if (syncCart && registerWsSender) {
+      registerWsSender(() => {
         syncCart(cartRef.current.map(item => ({
           dish: item.dish,
           quantity: item.quantity,
@@ -46,36 +31,29 @@ function AppInner() {
         })));
       });
     }
-  }, [syncCart, setSyncCallback]);
+  }, [syncCart, registerWsSender]);
 
-  /* ── 远程同步：当 roomCart 变化时，合并到本地 ── */
+  /* ★ Bridge: remote cart → local */
   useEffect(() => {
     if (roomCart && Object.keys(roomCart).length > 0) {
       syncCartFromRemote(roomCart);
     }
   }, [roomCart, syncCartFromRemote]);
 
-  /* ── 事件处理 ── */
-  const handleJoin = (rid, nick) => {
-    setRoomId(rid);
-    joinRoom(rid, nick);
-    setView("menu");
-  };
+  const handleJoin = (rid, nick) => { setRoomId(rid); joinRoom(rid, nick); setView("menu"); };
+  const handleLeave = () => { leaveRoom(); setView("room"); };
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-100">
       {view !== "room" && (
-        <Header
-          roomId={roomId} nickname={nickname}
-          memberCount={memberCount} connected={connected}
-          onShowHistory={() => setView("history")}
-          onLeaveRoom={() => { leaveRoom(); setView("room"); }}
-        />
+        <Header roomId={roomId} nickname={nickname} memberCount={memberCount}
+          connected={connected} onShowHistory={() => setView("history")}
+          onLeaveRoom={handleLeave} />
       )}
       {notifications.length > 0 && (
         <div className="fixed top-14 left-0 right-0 z-[100] flex flex-col items-center gap-1 pointer-events-none">
           {notifications.map(n => (
-            <div key={n.id} className="bg-gray-900/80 text-white text-xs px-4 py-1.5 rounded-full animate-slide-down pointer-events-auto">{n.text}</div>
+            <div key={n.id} className="bg-gray-900/80 text-white text-xs px-4 py-1.5 rounded-full animate-slide-down">{n.text}</div>
           ))}
         </div>
       )}
@@ -89,6 +67,4 @@ function AppInner() {
   );
 }
 
-export default function App() {
-  return <AppProvider><AppInner /></AppProvider>;
-}
+export default function App() { return <AppProvider><AppInner /></AppProvider>; }

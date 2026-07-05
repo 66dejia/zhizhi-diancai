@@ -34,7 +34,7 @@ export default function useWebSocket() {
       }
     }, 25000);
     return () => clearInterval(hb);
-  }, []);
+  }, []); 
 
   /* ── 发送 JSON 消息 ── */
   const send = useCallback((msg) => {
@@ -72,16 +72,16 @@ export default function useWebSocket() {
         const msg = JSON.parse(ev.data);
         switch (msg.type) {
           case "ROOM_STATE":
+            clientIdRef.current = msg.clientId;
             setMyClientId(msg.clientId);
             setMemberCount(msg.memberCount);
             setRoomCart(msg.cart || {});
             setRoomOrders(msg.orders || []);
             break;
           case "CART_SYNC":
-            // ★ 关键：只接收别人的更新（服务端已过滤 byClient）
-            setRoomCart(msg.cart || {});
-            if (msg.byClient && msg.byClient !== clientIdRef.current) {
-              addNotif(`${msg.nickname} 更新了购物车`);
+            // ★ 关键修复：忽略自己发出的回环消息，防止死循环
+            if (!msg.byClient || msg.byClient !== clientIdRef.current) {
+              setRoomCart(msg.cart || {});
             }
             break;
           case "ORDER_SYNC":
