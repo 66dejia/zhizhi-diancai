@@ -1,17 +1,11 @@
 /**
- * WebSocket 实时通信 Hook
+ * WebSocket 实时通信 Hook - 修复版
  * 支持房间机制：加入/离开房间、购物车同步、订单同步
+ * 修复：防止无限循环 + 精确同步
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 
-// 自动检测 WebSocket 地址：同域名下用 wss/wss 协议
-const getWsUrl = () => {
-  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}`;
-};
-
-const WS_URL = getWsUrl();
+const WS_URL = import.meta.env.VITE_WS_URL || "wss://zhizhi-diancai-production.up.railway.app";
 
 export default function useWebSocket() {
   const [connected, setConnected] = useState(false);
@@ -26,18 +20,8 @@ export default function useWebSocket() {
 
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
+  const myClientIdRef = useRef(null);
 
-  // 尝试重连
-  const tryReconnect = useCallback(() => {
-    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-    reconnectTimer.current = setTimeout(() => {
-      if (wsRef.current?.readyState !== 1 && roomId) {
-        joinRoom(roomId, nickname);
-      }
-    }, 3000);
-  }, [roomId, nickname]);
-
-  // 发送消息
   const sendMessage = useCallback((msg) => {
     if (wsRef.current && wsRef.current.readyState === 1) {
       wsRef.current.send(JSON.stringify(msg));
@@ -46,11 +30,7 @@ export default function useWebSocket() {
 
   // 加入房间
   const joinRoom = useCallback((rid, nick) => {
-    // 先关闭旧连接
-    if (wsRef.current) {
-      try { wsRef.current.close(); } catch {}
-    }
-
+    if (wsRef.current) { try { wsRef.current.close(); } catch {} }
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
@@ -65,125 +45,74 @@ export default function useWebSocket() {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        handleMessage(msg);
+        if (msg.type === "ROOM_STATE") {
+          setClientId(msg.clientId);
+          myClientIdRef.current = msg.clientId;
+          setRoomCart(msg.cart || {});
+          setRoomOrders(msg.orders || []);
+          setMemberCount(msg.memberCount || 1);
+        } else if (msg.type === "CART_SYNC") {
+          // 关键修复：忽略自己触发的更新（防止无限循环）
+          if (msg.byClient !== myClientIdRef.current) {
+            setRoomCart(msg.cart || {});
+            addNotification(`${msg.nickname} 更新了购物车`);
+          }
+        } else if (msg.type === "ORDER_SYNC") {
+          setRoomOrders(msg.orders || []);
+          setRoomCart(msg.cart || {});
+          if (msg.order.byClient !== myClientIdRef.current) {
+            addNotification(`${msg.order.nickname} 提交了新订单`);
+          }
+        } else if (msg.type === "MEMBER_JOINED") {
+          setMemberCount(msg.memberCount || 0);
+          addNotification(msg.message);
+        } else if (msg.type === "MEMBER_LEFT") {
+          setMemberCount(msg.memberCount || 0);
+          setRoomCart(msg.cart || {});
+          addNotification(msg.message);
+        } else if (msg.type === "PONG") {
+          // heartbeat
+        }
       } catch {}
     };
 
     ws.onerror = () => {
-      setError("连接服务器失败，请确保后端已启动");
+      setError("连接服务器失败");
       setConnected(false);
-      tryReconnect();
     };
 
-    ws.onclose = () => {
-      setConnected(false);
-      // 断开后尝试自动重连
-      tryReconnect();
-    };
+    ws.onclose = () => { setConnected(false); };
   }, []);
 
-  // 离开房间
   const leaveRoom = useCallback(() => {
     sendMessage({ type: "LEAVE_ROOM" });
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    setRoomId(null);
-    setNickname("");
-    setClientId(null);
-    setMemberCount(0);
-    setRoomCart({});
-    setRoomOrders([]);
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    setRoomId(null); setNickname(""); setClientId(null);
+    setMemberCount(0); setRoomCart({}); setRoomOrders([]);
     setConnected(false);
   }, []);
 
-  // 同步购物车
   const syncCart = useCallback((items) => {
     sendMessage({ type: "CART_UPDATE", items });
   }, []);
 
-  // 同步新订单
   const syncOrder = useCallback((order) => {
-    sendMessage({
-      type: "NEW_ORDER",
-      orderId: order.id,
-      items: order.items,
-      remark: order.remark,
-      dineType: order.dineType,
-      tableNo: order.tableNo,
-    });
+    sendMessage({ type: "NEW_ORDER", orderId: order.id, items: order.items, remark: order.remark, dineType: order.dineType, tableNo: order.tableNo });
   }, []);
 
-  // 清空购物车
-  const syncClearCart = useCallback(() => {
-    sendMessage({ type: "CLEAR_CART" });
-  }, []);
+  const syncClearCart = useCallback(() => { sendMessage({ type: "CLEAR_CART" }); }, []);
 
-  // 处理消息
-  const handleMessage = (msg) => {
-    switch (msg.type) {
-      case "ROOM_STATE":
-        setClientId(msg.clientId);
-        setRoomCart(msg.cart || {});
-        setRoomOrders(msg.orders || []);
-        setMemberCount(msg.memberCount || 1);
-        addNotification("已连接到房间");
-        break;
-
-      case "CART_SYNC":
-        setRoomCart(msg.cart || {});
-        if (msg.byClient && msg.byClient !== clientId) {
-          addNotification(`${msg.nickname} 更新了购物车`);
-        }
-        break;
-
-      case "ORDER_SYNC":
-        setRoomOrders(msg.orders || []);
-        setRoomCart(msg.cart || {});
-        addNotification(`${msg.order.nickname} 提交了新订单`);
-        break;
-
-      case "MEMBER_JOINED":
-        setMemberCount(msg.memberCount || 0);
-        addNotification(msg.message);
-        break;
-
-      case "MEMBER_LEFT":
-        setMemberCount(msg.memberCount || 0);
-        setRoomCart(msg.cart || {});
-        addNotification(msg.message);
-        break;
-
-      case "PONG":
-        break;
-
-      default:
-        break;
-    }
-  };
-
-  // 添加通知
   const addNotification = (text) => {
     const notif = { id: Date.now() + Math.random(), text, time: new Date().toISOString() };
     setNotifications((prev) => [...prev, notif]);
-    // 3秒后自动消失
-    setTimeout(() => {
-      setNotifications((prev) => prev.filter((n) => n.id !== notif.id));
-    }, 3000);
+    setTimeout(() => { setNotifications((prev) => prev.filter((n) => n.id !== notif.id)); }, 3000);
   };
 
-  // 心跳
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (wsRef.current?.readyState === 1) {
-        sendMessage({ type: "PING" });
-      }
-    }, 25000);
+    const timer = setInterval(() => { sendMessage({ type: "PING" }); }, 25000);
     return () => clearInterval(timer);
   }, []);
 
-  // 清理
   useEffect(() => {
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
@@ -192,19 +121,8 @@ export default function useWebSocket() {
   }, []);
 
   return {
-    connected,
-    roomId,
-    nickname,
-    clientId,
-    memberCount,
-    roomCart,
-    roomOrders,
-    notifications,
-    error,
-    joinRoom,
-    leaveRoom,
-    syncCart,
-    syncOrder,
-    syncClearCart,
+    connected, roomId, nickname, clientId, memberCount,
+    roomCart, roomOrders, notifications, error,
+    joinRoom, leaveRoom, syncCart, syncOrder, syncClearCart,
   };
 }

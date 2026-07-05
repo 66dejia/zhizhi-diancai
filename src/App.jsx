@@ -3,8 +3,8 @@
  * 流程：选择/创建房间 → 点菜主页（带实时同步）
  * 纯净文本 UI，无 Emoji
  */
-import { useState } from "react";
-import { AppProvider } from "./store/AppContext";
+import { useState, useEffect } from "react";
+import { AppProvider, useApp } from "./store/AppContext";
 import Header from "./components/Header";
 import MenuPage from "./pages/MenuPage";
 import OrderConfirm from "./components/OrderConfirm";
@@ -13,8 +13,9 @@ import RoomPage from "./pages/RoomPage";
 import useWebSocket from "./hooks/useWebSocket";
 
 function AppInner() {
-  const [view, setView] = useState("room"); // room → menu → checkout → history
+  const [view, setView] = useState("room");
   const [roomId, setRoomId] = useState(null);
+  const { syncCartFromRemote } = useApp();
 
   const ws = useWebSocket();
   const {
@@ -22,13 +23,20 @@ function AppInner() {
     nickname,
     memberCount,
     notifications,
-    error: wsError,
+    roomCart,
     joinRoom,
     leaveRoom,
     syncCart,
     syncOrder,
     syncClearCart,
   } = ws;
+
+  // 实时同步：当 WebSocket 接收到 roomCart 变化时，更新本地 AppContext
+  useEffect(() => {
+    if (roomCart && Object.keys(roomCart).length > 0) {
+      syncCartFromRemote(roomCart);
+    }
+  }, [roomCart, syncCartFromRemote]);
 
   const handleJoinRoom = (rid, nick) => {
     setRoomId(rid);

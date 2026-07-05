@@ -73,6 +73,29 @@ function reducer(state, action) {
     case "CLEAR_CART":
       return { ...state, cart: {} };
 
+    /* 从 WebSocket 接收的 roomCart 同步到本地 cart */
+    case "SYNC_CART": {
+      const { roomCart: rcart, clientId: cid } = action.payload;
+      // 将所有客户端的所有 items 合并到本地 cart
+      const newCart = {};
+      Object.entries(rcart || {}).forEach(([id, data]) => {
+        (data.items || []).forEach((item) => {
+          const cartKey = makeCartKey(item.dish.id, item.specs || null);
+          if (newCart[cartKey]) {
+            newCart[cartKey].quantity += item.quantity;
+          } else {
+            newCart[cartKey] = {
+              dish: item.dish,
+              quantity: item.quantity,
+              specs: item.specs || null,
+              cartKey,
+            };
+          }
+        });
+      });
+      return { ...state, cart: newCart };
+    }
+
     case "ADD_ORDER": {
       const { order } = action.payload;
       return {
@@ -228,6 +251,9 @@ export function AppProvider({ children }) {
   const deleteCategory = useCallback((id) => {
     dispatch({ type: "DELETE_CATEGORY", payload: { id } });
   }, []);
+  const syncCartFromRemote = useCallback((roomCart) => {
+    dispatch({ type: "SYNC_CART", payload: { roomCart } });
+  }, []);
 
   /* 计算购物车汇总 */
   const { totalPrice, totalCount, cartItems } = useCartTotals(state.cart);
@@ -249,6 +275,7 @@ export function AppProvider({ children }) {
     deleteDish,
     addCategory,
     deleteCategory,
+    syncCartFromRemote,
     getItemUnitPrice: getCartItemUnitPrice,
   };
 
